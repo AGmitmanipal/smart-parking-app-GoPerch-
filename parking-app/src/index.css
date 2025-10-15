@@ -1,0 +1,8 @@
+@import "leaflet/dist/leaflet.css";
+@import "tailwindcss";
+
+@layer utilities {
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    filter: invert(1) brightness(2);
+  }
+}
