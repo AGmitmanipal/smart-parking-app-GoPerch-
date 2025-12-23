@@ -1,27 +1,58 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
+const SlotSchema = require("./SlotSchema");
 
-const ZoneSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-  },
-  polygon: {
-    type: [
-      {
-        lat: Number,
-        lng: Number,
-      }
-    ],
-    required: true,
-  },
-  capacity: {
-    type: Number,
-    required: true,
-  },
-  available: {
-    type: Number,
-    required: true,
-  }
-});
+const ZoneSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      unique: true,
+    },
 
-module.exports = mongoose.model('parkingzones', ZoneSchema);
+    // Big geofence
+    polygon: {
+      type: [
+        {
+          lat: { type: Number, required: true },
+          lng: { type: Number, required: true },
+        },
+      ],
+      required: true,
+    },
+
+    // Slot-level geofencing (IMPORTANT)
+    slots: {
+      type: [SlotSchema],
+      required: true,
+      validate: v => v.length > 0,
+    },
+
+    capacity: {
+      type: Number,
+      required: true,
+    },
+
+    available: {
+      type: Number,
+      required: true,
+    },
+
+    parts: {
+      type: Number,
+      required: true, // number of slots
+    },
+
+    loc: {
+      lat: Number,
+      lng: Number,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("parkingzones", ZoneSchema);

@@ -36,7 +36,7 @@ const Login = () => {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 px-4 sm:px-6 lg:px-8">
+    <div className="flex items-center justify-center min-h-screen bg-linear-to-br from-indigo-500 via-purple-500 to-pink-500 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-sm sm:max-w-md md:max-w-lg lg:max-w-xl xl:max-w-2xl p-6 sm:p-8 md:p-10 lg:p-12 space-y-6 rounded-2xl shadow-2xl backdrop-blur-lg bg-white/20 dark:bg-gray-900/40 border border-white/30">
 
         <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-center text-white drop-shadow-lg">
@@ -100,7 +100,7 @@ const Login = () => {
 
           <button
             type="submit"
-            className="w-full py-2 sm:py-3 text-sm sm:text-base font-semibold text-white transition duration-200 ease-in-out transform rounded-lg bg-gradient-to-r from-pink-500 to-indigo-500 hover:from-indigo-600 hover:to-pink-600 focus:outline-none focus:ring-4 focus:ring-pink-300 hover:scale-[1.02]"
+            className="w-full py-2 sm:py-3 text-sm sm:text-base font-semibold text-white transition duration-200 ease-in-out transform rounded-lg bg-linear-to-r from-pink-500 to-indigo-500 hover:from-indigo-600 hover:to-pink-600 focus:outline-none focus:ring-4 focus:ring-pink-300 hover:scale-[1.02]"
           >
             {isSignup ? "Sign Up" : "Log In"}
           </button>

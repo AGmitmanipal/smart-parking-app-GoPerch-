@@ -1,17 +1,72 @@
-use('parkingappDB');
+use("parkingappDB");
 
+// ===== CONFIG =====
+const ZONE_NAME = "Home";
+const PARTS = 10;
+
+// Center of parking area
+const CENTER = {
+  lat: 15.268866,
+  lng: 74.003251
+};
+
+// 300m square (~0.0027 degrees)
+const HALF = 0.00135;
+
+// ===== BIG POLYGON (300m x 300m) =====
+const polygon = [
+  { lat: CENTER.lat - HALF, lng: CENTER.lng - HALF },
+  { lat: CENTER.lat - HALF, lng: CENTER.lng + HALF },
+  { lat: CENTER.lat + HALF, lng: CENTER.lng + HALF },
+  { lat: CENTER.lat + HALF, lng: CENTER.lng - HALF }
+];
+
+// Bounds
+const minLat = CENTER.lat - HALF;
+const maxLat = CENTER.lat + HALF;
+const minLng = CENTER.lng - HALF;
+const maxLng = CENTER.lng + HALF;
+
+// Slot width (divide by parts)
+const slotWidth = (maxLng - minLng) / PARTS;
+
+// ===== GENERATE SLOTS =====
+const slots = [];
+
+for (let i = 0; i < PARTS; i++) {
+  const lngStart = minLng + i * slotWidth;
+  const lngEnd = lngStart + slotWidth;
+
+  slots.push({
+    slotId: `slot-${i + 1}`,
+    index: i,
+    tag: `P${i + 1}`,
+    polygon: [
+      { lat: minLat, lng: lngStart },
+      { lat: minLat, lng: lngEnd },
+      { lat: maxLat, lng: lngEnd },
+      { lat: maxLat, lng: lngStart }
+    ],
+    status: "free",
+    occupiedBy: null,
+    lastUpdated: new Date()
+  });
+}
+
+// ===== UPDATE ZONE =====
 db.parkingzones.updateOne(
-  { name: "AB4 Manipal" },   // filter by zone name
+  { name: ZONE_NAME },
   {
     $set: {
-      polygon: [
-        { lat: 13.3529996621550535, lng: 74.79246201891901 },
-        { lat: 13.3529984651404832, lng: 74.79247735243494 },
-        { lat: 13.352992628944945, lng: 74.79247910844694 },
-        { lat: 13.352951844405364, lng: 74.79240078815428 }
-      ]
+      polygon,
+      slots,
+      capacity: PARTS,
+      available: PARTS,
+      parts: PARTS,
+      loc: CENTER,
+      isActive: true
     }
   }
 );
 
-print("✅ AB4 Manipal coordinates updated successfully");
+print(`✅ Zone "${ZONE_NAME}" updated with ${PARTS} slots (300m x 300m area)`);

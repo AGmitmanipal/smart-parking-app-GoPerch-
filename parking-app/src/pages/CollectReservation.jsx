@@ -1,153 +1,161 @@
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import { getAuth } from 'firebase/auth';
-import { useLocation } from 'react-router-dom';
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+import { getAuth } from "firebase/auth";
+import { useLocation } from "react-router-dom";
 
 const CollectReservation = () => {
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [endtime, setendtime] = useState(null)
-  const [starttime, setstarttime] = useState(null)
-  const location = useLocation()
-  const { zoneName } = location.state
-  const [bookings, setbookings] = useState([])
+  const location = useLocation();
+
+  // ⬅️ EXPECTED FROM MAP PAGE
+  const { zoneId, zoneName, slotId, slotTag } = location.state || {};
+
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [bookings, setBookings] = useState([]);
+
   const auth = getAuth();
   const user = auth.currentUser;
 
+  /* 🚨 GUARD: page opened without slot */
+  if (!zoneId || !slotId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-red-600 font-bold">
+        No slot selected. Please choose a slot from the map.
+      </div>
+    );
+  }
+
+  /* 🟢 CREATE SLOT RESERVATION */
+  const handleReservation = async () => {
+    if (!user) {
+      alert("Please log in first!");
+      return;
+    }
+
+    const startTime = new Date(start);
+    const endTime = new Date(end);
+    const now = new Date();
+
+    if (startTime < now || endTime < now) {
+      alert("You cannot select a past time.");
+      return;
+    }
+
+    if (startTime >= endTime) {
+      alert("End time must be after start time.");
+      return;
+    }
+
+    try {
+      const res = await axios.post("http://localhost:7000/reserve", {
+        userId: user.email,
+        zoneId,
+        slotId,
+        startTime: startTime,
+        endTime: endTime,
+      });
+
+      alert(res.data.message);
+    } catch (err) {
+      alert(err.response?.data?.message || "Reservation failed");
+    }
+  };
+
+  /* 📖 FETCH USER BOOKINGS */
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchBookings = async () => {
+      try {
+        const res = await axios.get(
+          `http://localhost:7000/reserve/book?email=${user.email}`
+        );
+        setBookings(res.data);
+      } catch (err) {
+        console.error("Error fetching bookings:", err);
+      }
+    };
+
+    fetchBookings();
+    const interval = setInterval(fetchBookings, 10000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  /* ❌ CANCEL RESERVATION */
   const delReserve = async (id) => {
     try {
-      const res = await axios.delete(`http://localhost:7000/reserve/del/${id}`);
-      setbookings(prev=>prev.filter(p=> p._id!==id))
+      await axios.delete(`http://localhost:7000/reserve/del/${id}`);
+      setBookings((prev) => prev.filter((b) => b._id !== id));
     } catch (err) {
       console.error(err);
     }
   };
 
-
-  const handleReservation = async () => {
-    const auth = getAuth();
-    const user = auth.currentUser;
-
-    if (!user) {
-      alert("Please log in first!");
-      return;
-    }
-    if (endtime < new Date()) {
-      alert("You can't select a time before the Current Time!");
-      return;
-    }
-    if (starttime > endtime) {
-      alert("You can't select a time before the Start Time!");
-      return;
-    }
-
-
-    const email = user.email;
-
-    try {
-      const response = await axios.post('http://localhost:7000/reserve', {
-        email,
-        zoneName,
-        timestampStart: start,
-        timestampEnd: end
-      })
-      alert(response.data.message);
-    } catch (err) {
-      alert(err.response.data.message)
-    }
-  };
-
-  useEffect(() => {
-
-
-    if (!user) return;
-    const email = user.email;
-
-    const fetchBookings = async () => {
-      try {
-        const booked = await axios.get(`http://localhost:7000/reserve/book?email=${email}`);
-        setbookings(booked.data);
-      } catch (err) {
-        console.log("Error fetching bookings:", err);
-      }
-    };
-
-    fetchBookings();
-
-    const interval = setInterval(fetchBookings, 10000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-
-
   return (
-    <div className="p-4 min-h-screen w-full bg-gradient-to-t from-sky-500 to-indigo-500">
-      <label className='text-amber-50 font-bold'>Start Time:</label><br />
+    <div className="p-4 min-h-screen w-full bg-linear-to-t from-sky-500 to-indigo-500">
+      <h1 className="text-white text-2xl font-bold mb-4">
+        🅿 {slotTag} — {zoneName}
+      </h1>
+
+      {/* START TIME */}
+      <label className="text-white font-bold">Start Time</label>
       <input
         type="datetime-local"
         value={start}
         min={new Date().toISOString().slice(0, 16)}
-        onChange={(e) => {
-          const selected = new Date(e.target.value);
-          const now = new Date();
-
-          if (selected < now) {
-            alert("You can't select a time before the current moment!");
-            return;
-          }
-
-          setStart(e.target.value);
-        }}
-        className="border-2 p-2 rounded bg-indigo-500 border-amber-50 text-white"
+        onChange={(e) => setStart(e.target.value)}
+        className="block w-full p-2 rounded bg-indigo-500 text-white border mb-4"
       />
-      <br /><br />
 
-      <label className='text-amber-50 font-bold'>End Time:</label><br />
+      {/* END TIME */}
+      <label className="text-white font-bold">End Time</label>
       <input
         type="datetime-local"
         value={end}
-        min={new Date().toISOString().slice(0, 16)}
-        onChange={(e) => {
-          const selected = new Date(e.target.value);
-          const startTime = new Date(start);
+        min={start}
+        onChange={(e) => setEnd(e.target.value)}
+        className="block w-full p-2 rounded bg-indigo-500 text-white border mb-6"
+      />
 
-          setEnd(e.target.value)
-          setendtime(selected)
-          setstarttime(startTime)
-        }}
-        className="border-2 p-2 rounded bg-indigo-500 border-amber-50 text-white"
-      /><br /><br />
-
-      <button type='button'
+      <button
         onClick={handleReservation}
-        className="border border-black rounded p-2 bg-white font-bold text-blue-950 hover:border-2 transition-all duration-300 h-[50px] w-[200px] hover:scale-105 hover:bg-blue-900 hover:border-white hover:text-white"
+        className="w-[220px] h-[50px] bg-white text-blue-900 font-bold rounded hover:bg-blue-900 hover:text-white transition"
       >
-        Confirm Your Seat!
+        Confirm Slot Reservation
       </button>
-      <h1 className="font-bold text-white mt-6 mb-4 text-2xl">Your Reserved Seats:</h1>
+
+      {/* BOOKINGS */}
+      <h2 className="text-white font-bold text-2xl mt-10 mb-4">
+        Your Reservations
+      </h2>
+
       {bookings.length > 0 ? (
-        bookings.map((b, index) => (
-          <div key={index}>
-            <br />
-            <div className='lg: flex flex-row gap-10 border-4 border-white items-center justify-between rounded-2xl p-5 bg-blue-400'>
-              <div className='lg: flex flex-col gap-2 text-amber-50 text-xl'>
-                <p className='font-bold'>{b.zoneName}</p>
-                <p className='text-left'>{new Date(b.timestampStart).toLocaleString()} ⮕ {new Date(b.timestampEnd).toLocaleString()}</p>
-              </div>
-              <div>
-                <button className='w-auto h-13 p-2 rounded border-3 bg-red-600 text-white font-bold border-white mr-3 sm:mr-5 hover:scale-110 transition-all duration-200 hover:bg-white hover:text-red-600 hover:border-red-600' onClick={() => { delReserve(b._id) }}>Cancel</button>
-              </div>
+        bookings.map((b) => (
+          <div
+            key={b._id}
+            className="bg-blue-400 border-4 border-white rounded-2xl p-5 mb-4 flex justify-between"
+          >
+            <div className="text-white">
+              <p className="font-bold">{b.zoneName}</p>
+              <p>🅿 {b.slotTag}</p>
+              <p>
+                {new Date(b.timestampStart).toLocaleString()} ⮕{" "}
+                {new Date(b.timestampEnd).toLocaleString()}
+              </p>
             </div>
+            <button
+              onClick={() => delReserve(b._id)}
+              className="bg-red-600 text-white font-bold px-4 py-2 rounded hover:bg-white hover:text-red-600"
+            >
+              Cancel
+            </button>
           </div>
         ))
       ) : (
-        <p>No bookings yet.</p>
+        <p className="text-white">No bookings yet.</p>
       )}
-
     </div>
   );
 };
 
 export default CollectReservation;
-
