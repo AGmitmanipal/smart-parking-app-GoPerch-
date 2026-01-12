@@ -8,33 +8,32 @@ const reservationSchema = new mongoose.Schema(
       required: true,
     },
 
-    slotId: {
+    userId: {
       type: String,
       required: true,
     },
 
-    userId: {
-      type: String,
-      required: false,
-    },
-
-    startTime: {
+    fromTime: {
       type: Date,
       required: true,
     },
 
-    endTime: {
+    toTime: {
       type: Date,
       required: true,
     },
 
     status: {
       type: String,
-      enum: ["active", "completed", "cancelled"],
-      default: "active",
+      enum: ["active", "expired", "cancelled", "booked", "reserved", "parked"],
+      default: "booked",
+    },
+    parkedAt: {
+      type: Date,
     },
   },
   { timestamps: true }
 );
 
+// Model name "Reservation" maps to "reservations" collection (Mongoose pluralizes) in parkingappDB database
 module.exports = mongoose.model("Reservation", reservationSchema);

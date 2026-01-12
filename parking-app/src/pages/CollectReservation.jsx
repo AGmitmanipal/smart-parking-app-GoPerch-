@@ -3,6 +3,7 @@ import axios from "axios";
 import { getAuth } from "firebase/auth";
 import { useLocation } from "react-router-dom";
 
+
 const CollectReservation = () => {
   const location = useLocation();
 
@@ -15,6 +16,8 @@ const CollectReservation = () => {
 
   const auth = getAuth();
   const user = auth.currentUser;
+
+  const RESERVATIONS_API_BASE_URL = import.meta.env.VITE_ZONES_API_BASE_URL || "http://localhost:5000";
 
   /* 🚨 GUARD: page opened without slot */
   if (!zoneId || !slotId) {
@@ -47,7 +50,7 @@ const CollectReservation = () => {
     }
 
     try {
-      const res = await axios.post("http://localhost:7000/reserve", {
+      const res = await axios.post(`${RESERVATIONS_API_BASE_URL}/reserve`, {
         userId: user.email,
         zoneId,
         slotId,
@@ -68,7 +71,7 @@ const CollectReservation = () => {
     const fetchBookings = async () => {
       try {
         const res = await axios.get(
-          `http://localhost:7000/reserve/book?email=${user.email}`
+          `${RESERVATIONS_API_BASE_URL}/reserve/book?email=${encodeURIComponent(user.email)}`
         );
         setBookings(res.data);
       } catch (err) {
@@ -84,7 +87,7 @@ const CollectReservation = () => {
   /* ❌ CANCEL RESERVATION */
   const delReserve = async (id) => {
     try {
-      await axios.delete(`http://localhost:7000/reserve/del/${id}`);
+      await axios.delete(`${RESERVATIONS_API_BASE_URL}/reserve/del/${id}`);
       setBookings((prev) => prev.filter((b) => b._id !== id));
     } catch (err) {
       console.error(err);

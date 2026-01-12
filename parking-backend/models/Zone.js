@@ -1,5 +1,4 @@
 const mongoose = require("mongoose");
-const SlotSchema = require("./SlotSchema");
 
 const ZoneSchema = new mongoose.Schema(
   {
@@ -8,8 +7,6 @@ const ZoneSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
-
-    // Big geofence
     polygon: {
       type: [
         {
@@ -19,34 +16,14 @@ const ZoneSchema = new mongoose.Schema(
       ],
       required: true,
     },
-
-    // Slot-level geofencing (IMPORTANT)
-    slots: {
-      type: [SlotSchema],
-      required: true,
-      validate: v => v.length > 0,
-    },
-
     capacity: {
       type: Number,
       required: true,
     },
-
     available: {
       type: Number,
-      required: true,
+      required: true, // Stores the current count of available spots
     },
-
-    parts: {
-      type: Number,
-      required: true, // number of slots
-    },
-
-    loc: {
-      lat: Number,
-      lng: Number,
-    },
-
     isActive: {
       type: Boolean,
       default: true,

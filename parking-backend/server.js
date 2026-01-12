@@ -1,84 +1,102 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const app = express();
 const cors = require("cors");
-const mongoose = require("mongoose");
+require("dotenv").config();
 const Zone = require("./models/Zone");
+const bookingRouter = require("./routes/book");
+const { reserveRouter, startReservationCron } = require("./routes/reserve");
 const Reservation = require("./models/Reservation");
 
 app.use(cors());
 app.use(express.json());
 
-mongoose
-  .connect("mongodb://127.0.0.1:27017/parkingappDB")
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.log("Mongo error", err));
+// Request logging
+app.use((req, res, next) => {
+  console.log(`📨 [${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
 
+// Health Check
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  });
+});
 
+// MongoDB Connection
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log("✅ MongoDB connected");
+
+    // Start cron jobs
+    startReservationCron();
+    console.log("📅 Reservation expiry cron started");
+  } catch (err) {
+    console.error("❌ Mongo connection error:", err);
+    process.exit(1);
+  }
+};
+
+connectDB();
+
+// Mount booking router
+app.use("/api/book", bookingRouter);
+
+// GET ZONES
 app.get("/", async (req, res) => {
   try {
-    const zones = await Zone.find();
-    const now = new Date();
+    // 1. Fetch Zones
+    const zones = await Zone.find({ isActive: true }).sort({ name: 1 }).lean();
 
-    // Get all active reservations across all zones for accurate counting
+    // 2. Fetch ALL Active Reservations
     const activeReservations = await Reservation.find({
-      status: "active"
-    });
+      status: { $in: ["active", "booked", "reserved", "parked"] },
+    }).lean();
 
-    // Create a map: zoneId -> Set of reserved slotIds
-    const reservedSlotsByZone = new Map();
-    activeReservations.forEach((res) => {
-      const zoneIdStr = res.zoneId.toString();
-      if (!reservedSlotsByZone.has(zoneIdStr)) {
-        reservedSlotsByZone.set(zoneIdStr, new Set());
-      }
-      reservedSlotsByZone.get(zoneIdStr).add(res.slotId);
-    });
+    const response = zones.map((zone) => {
+      // Filter reservations for this zone
+      const zoneRes = activeReservations.filter(r => r.zoneId.toString() === zone._id.toString());
 
-    const response = zones.map(zone => {
-      const totalSlots = zone.slots.length;
-      const zoneIdStr = zone._id.toString();
-      
-      // Count reserved slots based on ACTIVE reservations (not stale Zone document)
-      const reservedSlotIds = reservedSlotsByZone.get(zoneIdStr) || new Set();
-      const reservedCount = reservedSlotIds.size;
-      
-      // Calculate available: Total - Reserved
-      // Ensure it never goes negative (safety check)
-      const availableSlots = Math.max(0, totalSlots - reservedCount);
+      // Strict Status-Based Counting
+      // "reserved" & "parked" => HOLD capacity (Hard Booking)
+      // "booked" => Soft Intent (Does not reduce availability)
+      const reservedCount = zoneRes.filter(r => ["reserved", "parked"].includes(r.status)).length;
+      const prebookedCount = zoneRes.filter(r => r.status === "booked").length;
 
-      // Validation: Ensure capacity matches total slots and available is correct
-      if (availableSlots + reservedCount !== totalSlots) {
-        console.warn(`Zone ${zone.name}: Calculation mismatch. Total: ${totalSlots}, Reserved: ${reservedCount}, Available: ${availableSlots}`);
-      }
+      // Available = Capacity - (Reserved + Parked + Prebooked)
+      // "booked" (Future) NOW reduces availability again (Hard Booking)
+      const dynamicAvailable = Math.max(0, (zone.capacity || 0) - reservedCount - prebookedCount);
 
       return {
         _id: zone._id,
-        name: zone.name,
-        polygon: zone.polygon,
-        loc: zone.loc,
-        capacity: totalSlots, // Total number of slots
-        available: availableSlots, // Available = Total - Reserved (from active reservations)
-        reserved: reservedCount, // Reserved count for display
-        parts: totalSlots,
-        slots: zone.slots.map(s => ({
-          slotId: s.slotId,
-          tag: s.tag,
-          status: reservedSlotIds.has(s.slotId) ? "reserved" : "free", // Calculate from active reservations
-          polygon: s.polygon
-        }))
+        name: zone.name || "Unnamed Zone",
+        polygon: zone.polygon || [],
+
+        // Return explicit counts
+        capacity: zone.capacity || 0,
+        available: dynamicAvailable,
+
+        // Computed stats
+        reserved: reservedCount,
+        prebooked: prebookedCount,
       };
     });
 
     res.json(response);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      message: "Server error",
-      error: err.message
-    });
+    console.error("❌ GET / ERROR:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
-app.listen(5000, () =>
-  console.log("Backend running on http://localhost:5000")
-);
+// Mount reserve router
+app.use("/", reserveRouter);
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Backend server listening on http://localhost:${PORT}`);
+});

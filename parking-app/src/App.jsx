@@ -7,6 +7,7 @@ import Navbar from "./components/Navbar";
 import { auth } from "./services/firebase";
 import CollectReservation from "./pages/CollectReservation";
 import MyReservations from "./pages/MyReservations";
+import PreBooking from "./pages/PreBooking";
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -39,6 +40,10 @@ const App = () => {
         <Route
           path="/my-reservations"
           element={user ? <MyReservations /> : <Navigate to="/" />}
+        />
+        <Route
+          path="/prebooking"
+          element={user ? <PreBooking /> : <Navigate to="/" />}
         />
       </Routes>
     </>
