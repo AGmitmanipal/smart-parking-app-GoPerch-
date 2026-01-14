@@ -12,24 +12,89 @@ function startReservationCron() {
   cronStarted = true;
 
   // ================= CRON JOB =================
+  // Runs every minute to:
+  // 1. Transition "booked" (pre-bookings) → "reserved" when time window starts (fromTime <= now)
+  // 2. Expire "reserved" reservations when time window ends (toTime < now)
   cron.schedule("* * * * *", async () => {
     const now = new Date();
+    const session = await mongoose.startSession();
+    
     try {
-      // Find expired reservations
-      const expiredList = await Reservation.find({
-        status: { $in: ["active", "booked", "reserved", "parked"] },
-        toTime: { $lt: now }
-      });
+      session.startTransaction();
 
-      if (expiredList.length > 0) {
-        console.log(`♻️ Found ${expiredList.length} expired reservations. Processing cleanup...`);
+      // ================= TRANSITION: booked → reserved =================
+      // When pre-booking time window starts, convert to active reservation
+      const bookingsToActivate = await Reservation.find({
+        status: "booked",
+        fromTime: { $lte: now },
+        toTime: { $gt: now } // Still valid (not expired)
+      }).session(session);
+
+      if (bookingsToActivate.length > 0) {
+        console.log(`🔄 Converting ${bookingsToActivate.length} pre-bookings to active reservations...`);
         await Reservation.updateMany(
-          { _id: { $in: expiredList.map(r => r._id) } },
-          { $set: { status: "expired" } }
+          { 
+            _id: { $in: bookingsToActivate.map(r => r._id) },
+            status: "booked",
+            fromTime: { $lte: now },
+            toTime: { $gt: now }
+          },
+          { 
+            $set: { 
+              status: "reserved",
+              parkedAt: now
+            } 
+          },
+          { session }
         );
       }
+
+      // ================= EXPIRE: reserved → expired =================
+      // When reservation time window ends, mark as expired
+      const expiredReservations = await Reservation.find({
+        status: "reserved",
+        toTime: { $lt: now }
+      }).session(session);
+
+      if (expiredReservations.length > 0) {
+        console.log(`♻️ Expiring ${expiredReservations.length} reservations...`);
+        await Reservation.updateMany(
+          { 
+            _id: { $in: expiredReservations.map(r => r._id) },
+            status: "reserved",
+            toTime: { $lt: now }
+          },
+          { $set: { status: "expired" } },
+          { session }
+        );
+      }
+
+      // ================= EXPIRE: booked → expired =================
+      // Pre-bookings that never activated (expired before fromTime was reached)
+      const expiredBookings = await Reservation.find({
+        status: "booked",
+        toTime: { $lt: now }
+      }).session(session);
+
+      if (expiredBookings.length > 0) {
+        console.log(`♻️ Expiring ${expiredBookings.length} pre-bookings that never activated...`);
+        await Reservation.updateMany(
+          { 
+            _id: { $in: expiredBookings.map(r => r._id) },
+            status: "booked",
+            toTime: { $lt: now }
+          },
+          { $set: { status: "expired" } },
+          { session }
+        );
+      }
+
+      await session.commitTransaction();
     } catch (err) {
+      await session.abortTransaction();
       console.error("❌ Cron error:", err);
+    } finally {
+      session.endSession();
     }
   });
 }
@@ -57,7 +122,129 @@ router.get("/reserve/book", async (req, res) => {
   }
 });
 
+// ================= CREATE PRE-BOOKING =================
+// Pre-bookings are future intent, marked as "booked" status, count as "prebooked"
+router.post("/prebook", async (req, res) => {
+  const { userId, zoneId, fromTime, toTime } = req.body;
+
+  if (!userId || !zoneId || !fromTime || !toTime) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  const start = new Date(fromTime);
+  const end = new Date(toTime);
+  const now = new Date();
+
+  if (start >= end) {
+    return res.status(400).json({ message: "Invalid time range" });
+  }
+
+  // Pre-bookings must be for future time
+  if (start.getTime() <= now.getTime()) {
+    return res.status(400).json({ 
+      message: "Pre-bookings must be for future time. Use /reserve for immediate reservations." 
+    });
+  }
+
+  // Use MongoDB session for atomic transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const zone = await Zone.findById(zoneId).session(session);
+    if (!zone) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Zone not found" });
+    }
+
+    // ================= ENFORCE ONE ACTIVE ACTION PER ZONE =================
+    const existing = await Reservation.findOne({
+      userId,
+      zoneId,
+      status: { $in: ["booked", "reserved"] }
+    }).session(session);
+
+    if (existing) {
+      await session.abortTransaction();
+      return res.status(409).json({ 
+        message: "You already have an active pre-booking or reservation in this zone." 
+      });
+    }
+
+    // ================= CAPACITY CHECK =================
+    const overlappingReservations = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: { $in: ["reserved", "booked"] },
+      $and: [
+        { fromTime: { $lt: end } },
+        { toTime: { $gt: start } }
+      ]
+    }).session(session);
+
+    const totalReserved = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: "reserved"
+    }).session(session);
+
+    const totalBooked = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: "booked"
+    }).session(session);
+
+    const overallAvailable = Math.max(0, zone.capacity - totalReserved - totalBooked);
+
+    if (overlappingReservations >= zone.capacity) {
+      await session.abortTransaction();
+      return res.status(409).json({ 
+        message: "Zone is fully booked for this time range." 
+      });
+    }
+
+    if (overallAvailable <= 0) {
+      await session.abortTransaction();
+      return res.status(409).json({ 
+        message: "Zone is fully booked. No available spots." 
+      });
+    }
+
+    // ================= CREATE PRE-BOOKING =================
+    // Pre-bookings are marked as "booked" status, count as "prebooked"
+    const newPreBooking = new Reservation({
+      userId,
+      zoneId,
+      fromTime: start,
+      toTime: end,
+      status: "booked", // Pre-booking status
+      parkedAt: undefined // No parkedAt for pre-bookings
+    });
+
+    await newPreBooking.save({ session });
+    await session.commitTransaction();
+
+    res.json({
+      message: "Pre-booking confirmed. Your reservation will activate at the scheduled time.",
+      reservationId: newPreBooking._id,
+      status: newPreBooking.status
+    });
+
+  } catch (err) {
+    await session.abortTransaction();
+    
+    if (err.code === 11000) {
+      return res.status(409).json({ 
+        message: "You already have an active pre-booking or reservation in this zone." 
+      });
+    }
+    
+    console.error("❌ Pre-booking Error:", err);
+    res.status(500).json({ message: "Server Error", error: err.message });
+  } finally {
+    session.endSession();
+  }
+});
+
 // ================= MAKE RESERVATION =================
+// Reservations are active parking, marked as "reserved" status, count as "reserved"
 router.post("/reserve", async (req, res) => {
   const { userId, zoneId, fromTime, toTime } = req.body;
 
@@ -67,125 +254,200 @@ router.post("/reserve", async (req, res) => {
 
   const start = new Date(fromTime);
   const end = new Date(toTime);
+  const now = new Date();
 
   if (start >= end) {
     return res.status(400).json({ message: "Invalid time range" });
   }
 
-  // STRICT VALIDATION: Check for past time
-  if (start.getTime() <= Date.now()) {
-    return res.status(400).json({
-      message: "Cannot book or reserve past time. Please select a future time."
-    });
-  }
+  // Use MongoDB session for atomic transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
   try {
-    const zone = await Zone.findById(zoneId);
-    if (!zone) return res.status(404).json({ message: "Zone not found" });
+    const zone = await Zone.findById(zoneId).session(session);
+    if (!zone) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Zone not found" });
+    }
 
-    // 1. Check Existing Active Reservation (STRICT 1-PER-USER)
-    // "if it has active reservation dont let the same user reserve again"
-    // 3. USER CONSTRAINT CHECK (STRICT 1-PER-USER)
-    // Single Source of Truth: Check if user has ANY active claim in this zone regardless of time.
-    // "User can never create more than one active parking action within the same zone"
+    // ================= ENFORCE ONE ACTIVE ACTION PER ZONE =================
+    // Check for existing active reservation or pre-booking in the same zone
     const existing = await Reservation.findOne({
       userId,
       zoneId,
-      status: { $in: ["active", "booked", "reserved", "parked"] }
-    });
-
-    // Check Intent: Is the user physically arriving NOW? (within 5 min buffer)
-    const isAccessingNow = start.getTime() <= (Date.now() + 5 * 60000);
+      status: { $in: ["booked", "reserved"] }
+    }).session(session);
 
     if (existing) {
-      // 3a. CHECK-IN LOGIC (Conversion)
-      // Only allowed if User is Arriving Now AND Times Overlap with their EXISTING slot
-      const overlapsOwn = (existing.fromTime < end) && (existing.toTime > start);
+      // ================= CONVERSION LOGIC: Pre-booking → Reservation =================
+      // If user has a pre-booking (booked) and is creating a reservation within valid window
+      if (existing.status === 'booked') {
+        // Check if user is within valid pre-booking window (fromTime <= now <= toTime)
+        const isValidWindow = existing.fromTime <= now && now <= existing.toTime;
+        // Check if new request overlaps with existing pre-booking
+        const overlapsOwn = (existing.fromTime < end) && (existing.toTime > start);
 
-      if (isAccessingNow && overlapsOwn) {
-        // Convert 'booked' -> 'reserved' (Parked)
-        if (existing.status === 'booked') {
+        if (isValidWindow && overlapsOwn) {
+          // ATOMIC CONVERSION: Pre-booking → Reservation
+          // This decrements booked count and increments reserved count exactly once
           existing.status = 'reserved';
-          existing.parkedAt = new Date();
-          await existing.save();
+          existing.parkedAt = now;
+          await existing.save({ session });
+
+          await session.commitTransaction();
           return res.json({
-            message: "Welcome! Pre-booking activated.",
+            message: "Pre-booking converted to active reservation.",
             reservationId: existing._id,
             status: "reserved"
           });
-        }
-        // If already parked
-        if (['reserved', 'parked'].includes(existing.status)) {
-          return res.json({
-            message: "Welcome back!",
-            reservationId: existing._id,
-            status: existing.status
+        } else {
+          // Pre-booking exists but not in valid window or doesn't overlap
+          await session.abortTransaction();
+          return res.status(409).json({ 
+            message: "You already have a pre-booking in this zone. Cancel it first or wait for the valid time window." 
           });
         }
       }
 
-      // 3b. REJECTION
-      // If we found ANY record and it wasn't a valid check-in, we strictly block.
-      return res.status(409).json({
-        message: "You already have an active reservation or booking in this zone. Limit 1 per user."
+      // If user already has an active reservation (reserved)
+      if (existing.status === 'reserved') {
+        // Check if it's the same time slot (idempotency)
+        const isSameSlot = existing.fromTime.getTime() === start.getTime() && 
+                          existing.toTime.getTime() === end.getTime();
+        if (isSameSlot) {
+          await session.abortTransaction();
+          return res.json({
+            message: "You already have an active reservation for this time slot.",
+            reservationId: existing._id,
+            status: "reserved"
+          });
+        } else {
+          await session.abortTransaction();
+          return res.status(409).json({ 
+            message: "You already have an active reservation in this zone. Only one active action per zone allowed." 
+          });
+        }
+      }
+    }
+
+    // ================= CAPACITY CHECK =================
+    // Calculate availability for the requested time window
+    // Check for overlapping reservations that would consume capacity
+    // Reserved: active parking (status === "reserved")
+    // Booked: future pre-bookings (status === "booked")
+    // Both reserved and booked consume capacity, so we count both
+    const overlappingReservations = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: { $in: ["reserved", "booked"] },
+      $and: [
+        { fromTime: { $lt: end } },  // Reservation starts before requested end
+        { toTime: { $gt: start } }   // Reservation ends after requested start
+      ]
+    }).session(session);
+
+    // Check overall availability: capacity - reserved - booked (all time)
+    // This ensures we never exceed total capacity
+    const totalReserved = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: "reserved"
+    }).session(session);
+
+    const totalBooked = await Reservation.countDocuments({
+      zoneId: zoneId,
+      status: "booked"
+    }).session(session);
+
+    const overallAvailable = Math.max(0, zone.capacity - totalReserved - totalBooked);
+
+    // Check if there's capacity for the overlapping time window
+    if (overlappingReservations >= zone.capacity) {
+      await session.abortTransaction();
+      return res.status(409).json({ 
+        message: "Zone is fully booked for this time range." 
       });
     }
 
-    // 4. ATOMIC VISUALIZATION & CAPACITY CHECK
-    // Determine target status
-    const targetStatus = isAccessingNow ? "reserved" : "booked";
-
-    // Count all records that consume capacity ("booked", "reserved", "parked")
-    // and overlap with the Requested Window.
-    const capacityConsumers = await Reservation.countDocuments({
-      zoneId: zoneId,
-      status: { $in: ["active", "booked", "reserved", "parked"] },
-      $and: [
-        { fromTime: { $lt: end } },
-        { toTime: { $gt: start } }
-      ]
-    });
-
-    if (capacityConsumers >= zone.capacity) {
-      return res.status(409).json({ message: "Zone is fully booked for this time range." });
+    // Also check overall availability to prevent exceeding capacity
+    if (overallAvailable <= 0) {
+      await session.abortTransaction();
+      return res.status(409).json({ 
+        message: "Zone is fully booked. No available spots." 
+      });
     }
 
-    // 5. CREATE (Atomic Insertion)
+    // ================= CREATE NEW RESERVATION =================
+    // Reservations are active parking, marked as "reserved" status immediately
+    // This counts as "reserved" right away, not "booked"
     const newReservation = new Reservation({
       userId,
       zoneId,
       fromTime: start,
       toTime: end,
-      status: targetStatus,
-      parkedAt: targetStatus === 'reserved' ? new Date() : undefined
+      status: "reserved", // Reservation status - active parking
+      parkedAt: now // Set parkedAt immediately to mark as active
     });
 
-    await newReservation.save();
+    await newReservation.save({ session });
+    await session.commitTransaction();
 
     res.json({
-      message: targetStatus === 'booked' ? "Pre-booking Confirmed" : "Parking Confirmed",
+      message: "Reservation confirmed. Parking is active and counted as reserved.",
       reservationId: newReservation._id,
-      status: targetStatus
+      status: newReservation.status
     });
 
   } catch (err) {
-    console.error("Reservation Error:", err);
-    res.status(500).json({ message: "Server Error" });
+    await session.abortTransaction();
+    
+    if (err.code === 11000) {
+      return res.status(409).json({ 
+        message: "You already have an active reservation or pre-booking in this zone." 
+      });
+    }
+    
+    console.error("❌ Reservation Error:", err);
+    res.status(500).json({ message: "Server Error", error: err.message });
+  } finally {
+    session.endSession();
   }
 });
 
 // ================= CANCEL RESERVATION =================
 router.delete("/reserve/:id", async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const r = await Reservation.findById(req.params.id);
-    if (!r) return res.status(404).json({ message: "Reservation not found" });
+    const r = await Reservation.findById(req.params.id).session(session);
+    if (!r) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Reservation not found" });
+    }
 
+    // Only allow cancellation of active bookings/reservations
+    if (!["booked", "reserved"].includes(r.status)) {
+      await session.abortTransaction();
+      return res.status(400).json({ 
+        message: `Cannot cancel reservation with status: ${r.status}` 
+      });
+    }
+
+    // Atomic cancellation: update status to cancelled
     r.status = "cancelled";
-    await r.save();
+    await r.save({ session });
+    await session.commitTransaction();
 
-    res.json({ message: "Cancelled successfully" });
+    res.json({ 
+      message: "Cancelled successfully",
+      reservationId: r._id
+    });
   } catch (err) {
-    res.status(500).json({ message: "Cancel failed" });
+    await session.abortTransaction();
+    console.error("❌ Cancel Error:", err);
+    res.status(500).json({ message: "Cancel failed", error: err.message });
+  } finally {
+    session.endSession();
   }
 });
 

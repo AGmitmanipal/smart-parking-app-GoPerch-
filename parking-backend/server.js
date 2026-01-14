@@ -52,37 +52,42 @@ app.get("/", async (req, res) => {
     // 1. Fetch Zones
     const zones = await Zone.find({ isActive: true }).sort({ name: 1 }).lean();
 
-    // 2. Fetch ALL Active Reservations
+    // 2. Fetch ALL Active Reservations (booked = pre-bookings, reserved = active parking)
     const activeReservations = await Reservation.find({
-      status: { $in: ["active", "booked", "reserved", "parked"] },
+      status: { $in: ["booked", "reserved"] },
     }).lean();
 
     const response = zones.map((zone) => {
       // Filter reservations for this zone
       const zoneRes = activeReservations.filter(r => r.zoneId.toString() === zone._id.toString());
 
-      // Strict Status-Based Counting
-      // "reserved" & "parked" => HOLD capacity (Hard Booking)
-      // "booked" => Soft Intent (Does not reduce availability)
-      const reservedCount = zoneRes.filter(r => ["reserved", "parked"].includes(r.status)).length;
-      const prebookedCount = zoneRes.filter(r => r.status === "booked").length;
+      // ================= PRODUCTION AUDIT: STRICT STATE SEPARATION =================
+      // 1. "booked" = Pre-booking (future intent) → affects booked count only
+      // 2. "reserved" = Active parking → affects reserved count only
+      // 3. Availability = capacity - reserved - booked (never negative, never exceed capacity)
+      // 4. All counts are based on Reservation.status, NOT time windows
+      //    (Time-based transitions are handled by cron job)
 
-      // Available = Capacity - (Reserved + Parked + Prebooked)
-      // "booked" (Future) NOW reduces availability again (Hard Booking)
-      const dynamicAvailable = Math.max(0, (zone.capacity || 0) - reservedCount - prebookedCount);
+      // Count by status (strict separation)
+      const reservedCount = zoneRes.filter(r => r.status === "reserved").length;
+      const bookedCount = zoneRes.filter(r => r.status === "booked").length;
+
+      // Calculate availability: capacity - reserved - booked
+      // Enforce: never negative, never exceed capacity
+      const available = Math.max(0, Math.min(zone.capacity || 0, (zone.capacity || 0) - reservedCount - bookedCount));
 
       return {
         _id: zone._id,
         name: zone.name || "Unnamed Zone",
         polygon: zone.polygon || [],
 
-        // Return explicit counts
+        // Return explicit counts (backend-provided, single source of truth)
         capacity: zone.capacity || 0,
-        available: dynamicAvailable,
+        available: available,
 
-        // Computed stats
-        reserved: reservedCount,
-        prebooked: prebookedCount,
+        // Computed stats (strict state separation)
+        reserved: reservedCount,  // Active parking (status === "reserved")
+        prebooked: bookedCount,   // Future pre-bookings (status === "booked")
       };
     });
 

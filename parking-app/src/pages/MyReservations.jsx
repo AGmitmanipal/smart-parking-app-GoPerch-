@@ -127,13 +127,17 @@ const MyReservations = () => {
                     <p>From: <span className="font-medium text-gray-700">{start.toLocaleString()}</span></p>
                     <p>To: <span className="font-medium text-gray-700">{end.toLocaleString()}</span></p>
                   </div>
-                  <div className={`mt-2 inline-block px-2 py-1 rounded text-xs font-bold uppercase ${r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                    {r.status}
+                  <div className={`mt-2 inline-block px-2 py-1 rounded text-xs font-bold uppercase ${
+                    r.status === 'reserved' ? 'bg-yellow-100 text-yellow-700' : 
+                    r.status === 'booked' ? 'bg-blue-100 text-blue-700' : 
+                    'bg-gray-100 text-gray-500'
+                  }`}>
+                    {r.status === 'booked' ? 'Pre-booked' : r.status === 'reserved' ? 'Active' : r.status}
                   </div>
                 </div>
 
                 <div className="flex gap-2">
-                  {['active', 'booked', 'reserved'].includes(r.status) && (
+                  {['booked', 'reserved'].includes(r.status) && (
                     <button
                       onClick={() => cancelReservation(r._id)}
                       disabled={cancellingId === r._id}

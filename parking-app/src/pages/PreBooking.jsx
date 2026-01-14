@@ -39,9 +39,8 @@ export default function PreBooking() {
       // Use the general booking history endpoint
       const res = await fetch(`${RESERVATIONS_BASE}/reserve/book?userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
-      // Filter for future/active bookings if desired, or show all. 
-      // Let's show active ones.
-      const active = Array.isArray(data) ? data.filter(d => ['active', 'booked', 'reserved'].includes(d.status)) : [];
+      // Filter for active bookings/reservations (booked = pre-bookings, reserved = active parking)
+      const active = Array.isArray(data) ? data.filter(d => ['booked', 'reserved'].includes(d.status)) : [];
       setMyReservations(active);
     } catch (err) {
       console.error("Failed to fetch reservations", err);
@@ -67,7 +66,8 @@ export default function PreBooking() {
     setMsg(null);
 
     try {
-      const res = await fetch(`${RESERVATIONS_BASE}/reserve`, {
+      // Use /prebook endpoint for pre-bookings (creates with "booked" status)
+      const res = await fetch(`${RESERVATIONS_BASE}/prebook`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -80,14 +80,14 @@ export default function PreBooking() {
 
       const data = await res.json();
       if (res.ok) {
-        setMsg({ type: 'success', text: 'Booking Successful!' });
+        setMsg({ type: 'success', text: 'Pre-booking Successful! Your reservation will activate at the scheduled time.' });
         fetchMyReservations();
         fetchZones(); // Update availability counts
         // Reset form
         setFromTime("");
         setToTime("");
       } else {
-        setMsg({ type: 'error', text: data.message || "Booking Failed" });
+        setMsg({ type: 'error', text: data.message || "Pre-booking Failed" });
       }
     } catch (err) {
       console.error(err);
@@ -121,14 +121,14 @@ export default function PreBooking() {
   return (
     <div className="min-h-screen p-6 bg-gradient-to-br from-purple-600 via-indigo-600 to-pink-500">
       <h1 className="text-3xl font-bold text-yellow-300 mb-6 underline underline-offset-8">
-        Booking
+        Pre-booking
       </h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
 
         {/* BOOKING FORM */}
         <div className="bg-white/10 border border-white/30 rounded-xl p-6 shadow-xl backdrop-blur-md h-fit">
-          <h2 className="text-xl font-bold text-white mb-4">Reserve a Spot</h2>
+          <h2 className="text-xl font-bold text-white mb-4">Pre-book a Spot</h2>
 
           {msg && (
             <div className={`p-3 rounded mb-4 ${msg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -183,7 +183,7 @@ export default function PreBooking() {
               disabled={processing}
               className="w-full py-3 bg-yellow-400 text-purple-900 font-bold rounded-lg shadow-lg hover:bg-yellow-300 hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {processing ? "Booking..." : "Confirm Reservation"}
+              {processing ? "Pre-booking..." : "Confirm Pre-booking"}
             </button>
           </div>
         </div>

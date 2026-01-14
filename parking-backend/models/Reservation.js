@@ -25,8 +25,12 @@ const reservationSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["active", "expired", "cancelled", "booked", "reserved", "parked"],
+      enum: ["expired", "cancelled", "booked", "reserved"],
       default: "booked",
+      // booked: Pre-booking (future intent) → affects booked count only
+      // reserved: Active parking → affects reserved count only
+      // expired: Reservation/pre-booking expired (toTime < now)
+      // cancelled: User cancelled the reservation/pre-booking
     },
     parkedAt: {
       type: Date,
@@ -36,4 +40,23 @@ const reservationSchema = new mongoose.Schema(
 );
 
 // Model name "Reservation" maps to "reservations" collection (Mongoose pluralizes) in parkingappDB database
-module.exports = mongoose.model("Reservation", reservationSchema);
+const Reservation = mongoose.model("Reservation", reservationSchema);
+
+// STRICT CONSTRAINT: A user can have only ONE active action per zone at any time.
+// This enforces: one active pre-booking OR reservation per zone per user.
+// We use a partial unique index to enforce this at the database level.
+// This prevents race conditions where two simultaneous requests could create duplicate bookings.
+Reservation.collection.createIndex(
+  { userId: 1, zoneId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["booked", "reserved"] }
+    },
+    background: true
+  }
+).catch(err => {
+  console.warn("⚠️ Warning: Could not create unique index on Reservations. This might be because of existing duplicate data.", err.message);
+});
+
+module.exports = Reservation;
